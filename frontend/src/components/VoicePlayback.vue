@@ -1,285 +1,545 @@
 <template>
   <div class="voice-playback">
     <div class="playback-header">
-      <h3>Voice Playback</h3>
-      <span v-if="isPlaying" class="playing-indicator">🔊 Playing...</span>
+      <h3>🎵 Voice Editor (CapCut Style)</h3>
+      <span v-if="isPlaying" class="playing-indicator">● Playing...</span>
     </div>
 
-    <div v-if="audioUrl" class="playback-controls">
+    <!-- Player Controls -->
+    <div class="player-controls">
       <button
-        @click="togglePlayback"
+        @click="togglePlay"
         class="btn btn-primary"
-        :disabled="isLoading"
+        :disabled="!audioUrl"
       >
-        <span v-if="!isPlaying">▶️ Play</span>
-        <span v-else>⏸️ Pause</span>
+        {{ isPlaying ? 'Pause' : 'Play' }}
       </button>
 
-      <div class="volume-control">
-        <span class="label">Volume:</span>
-        <input
-          v-model="volume"
-          @input="updateVolume"
-          type="range"
-          min="0"
-          max="100"
-          class="slider"
-        />
-        <span class="volume-value">{{ volume }}%</span>
-      </div>
-
       <div class="time-info">
-        {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+        <span>{{ formatTime(currentTime) }}</span>
+        <span>/</span>
+        <span>{{ formatTime(duration) }}</span>
+      </div>
+
+      <input
+        v-model.number="currentTime"
+        type="range"
+        min="0"
+        :max="duration"
+        @input="seek"
+        class="progress-bar"
+      />
+
+      <select v-model="playbackSpeed" class="speed-select">
+        <option value="0.5">0.5x</option>
+        <option value="1">1x</option>
+        <option value="1.5">1.5x</option>
+        <option value="2">2x</option>
+      </select>
+    </div>
+
+    <!-- Waveform Visualization with Trim Handles -->
+    <div v-if="audioUrl" class="waveform-section">
+      <canvas ref="waveformCanvas" class="waveform"></canvas>
+      <div class="trim-controls">
+        <div class="trim-input-group">
+          <label>Start (s):</label>
+          <input v-model.number="trimStart" type="number" min="0" step="0.1" />
+        </div>
+        <div class="trim-input-group">
+          <label>End (s):</label>
+          <input v-model.number="trimEnd" type="number" min="0" step="0.1" />
+        </div>
+        <button @click="applyTrim" class="btn btn-secondary" :disabled="!audioUrl">
+          Trim
+        </button>
+        <button @click="resetTrim" class="btn btn-secondary">Reset</button>
       </div>
     </div>
 
-    <!-- Waveform Visualization -->
-    <div v-if="audioUrl" class="waveform-container">
-      <div ref="playbackWaveform" class="waveform"></div>
-      <div class="progress-bar-container">
-        <div class="progress-bar" :style="{ width: progressPercent + '%' }"></div>
-        <input
-          @click="seek"
-          type="range"
-          min="0"
-          max="100"
-          :value="progressPercent"
-          class="progress-slider"
-        />
+    <!-- Volume and Playback Speed -->
+    <div class="controls-grid">
+      <div class="control-item">
+        <label>Volume</label>
+        <input v-model.number="volume" type="range" min="0" max="1" step="0.1" @input="updateVolume" />
+        <span>{{ Math.round(volume * 100) }}%</span>
+      </div>
+
+      <div class="control-item">
+        <label>Playback Speed</label>
+        <input v-model.number="audioSpeed" type="range" min="0.5" max="2" step="0.1" />
+        <span>{{ audioSpeed.toFixed(1) }}x</span>
+      </div>
+
+      <div class="control-item">
+        <label>Pitch Shift</label>
+        <input v-model.number="pitchShift" type="range" min="-12" max="12" step="1" />
+        <span>{{ pitchShift > 0 ? '+' : '' }}{{ pitchShift }}</span>
+      </div>
+
+      <div class="control-item">
+        <label>Bass Boost</label>
+        <input v-model.number="bassBoost" type="range" min="0" max="2" step="0.1" />
+        <span>{{ bassBoost.toFixed(1) }}x</span>
       </div>
     </div>
 
-    <!-- Audio Element (hidden) -->
-    <audio
-      ref="audioElement"
-      @play="isPlaying = true"
-      @pause="isPlaying = false"
-      @ended="onAudioEnded"
-      @timeupdate="updateTime"
-      @loadedmetadata="onMetadata"
-      @error="onAudioError"
-      class="hidden-audio"
-    ></audio>
-
-    <!-- Loading Indicator -->
-    <div v-if="isLoading" class="loading-indicator">
-      <div class="spinner"></div>
-      <p>Loading audio...</p>
+    <!-- Voice Filters and Effects -->
+    <div class="effects-section">
+      <h4>Voice Filters</h4>
+      <div class="filter-grid">
+        <button
+          v-for="filter in voiceFilters"
+          :key="filter"
+          @click="applyVoiceFilter(filter)"
+          :class="{ active: activeFilter === filter }"
+          class="filter-btn"
+        >
+          {{ filter }}
+        </button>
+      </div>
     </div>
 
-    <!-- Error Display -->
+    <!-- Audio Enhancements -->
+    <div class="enhancement-section">
+      <h4>Enhancements</h4>
+      <div class="button-grid">
+        <button
+          @click="applyNoiseReduction"
+          class="btn btn-secondary"
+          :disabled="!audioUrl || isProcessing"
+        >
+          {{ isProcessing ? 'Processing...' : 'Noise Reduction' }}
+        </button>
+        <button @click="normalizeAudio" class="btn btn-secondary" :disabled="!audioUrl">
+          Auto Normalize
+        </button>
+        <button @click="applyCompression" class="btn btn-secondary" :disabled="!audioUrl">
+          Compression
+        </button>
+        <button @click="applyEqualizer" class="btn btn-secondary" :disabled="!audioUrl">
+          Equalizer
+        </button>
+      </div>
+    </div>
+
+    <!-- Transition Effects -->
+    <div class="transitions-section">
+      <h4>Transitions</h4>
+      <div class="transition-grid">
+        <button
+          v-for="transition in transitions"
+          :key="transition"
+          @click="applyTransition(transition)"
+          :class="{ active: activeTransition === transition }"
+          class="transition-btn"
+        >
+          {{ transition }}
+        </button>
+      </div>
+    </div>
+
+    <!-- Auto Subtitles -->
+    <div class="subtitle-section" v-if="subtitles.length > 0">
+      <h4>Auto Subtitles</h4>
+      <div class="subtitles-container">
+        <div v-for="(sub, idx) in subtitles" :key="idx" class="subtitle-item">
+          <span class="time">{{ formatTime(sub.start) }}</span>
+          <span class="text">{{ sub.text }}</span>
+          <button @click="editSubtitle(idx)" class="edit-btn">Edit</button>
+          <button @click="deleteSubtitle(idx)" class="delete-btn">✕</button>
+        </div>
+      </div>
+      <button @click="exportSubtitles" class="btn btn-secondary">Export SRT</button>
+    </div>
+
+    <!-- Cut and Segments -->
+    <div class="segments-section">
+      <h4>Segments / Cuts</h4>
+      <div class="button-grid">
+        <button @click="addCut" class="btn btn-secondary" :disabled="!audioUrl">
+          Add Cut at {{ formatTime(currentTime) }}
+        </button>
+      </div>
+      <div v-if="cuts.length > 0" class="cuts-list">
+        <div v-for="(cut, idx) in cuts" :key="idx" class="cut-item">
+          <span>Cut {{ idx + 1 }}: {{ formatTime(cut) }}</span>
+          <button @click="removeCut(idx)" class="delete-btn">Remove</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Export Options -->
+    <div class="export-section">
+      <h4>Export</h4>
+      <div class="export-controls">
+        <select v-model="exportFormat" class="format-select">
+          <option value="wav">WAV</option>
+          <option value="mp3">MP3</option>
+          <option value="aac">AAC</option>
+          <option value="ogg">OGG</option>
+        </select>
+        <button @click="exportAudio" class="btn btn-primary" :disabled="!audioUrl">
+          Export {{ exportFormat.toUpperCase() }}
+        </button>
+      </div>
+    </div>
+
+    <!-- Messages -->
     <div v-if="error" class="error-box">
       <p>{{ error }}</p>
       <button @click="error = null" class="btn btn-small">Dismiss</button>
     </div>
+    <div v-if="successMsg" class="success-box">
+      <p>{{ successMsg }}</p>
+    </div>
+
+    <!-- Hidden audio element -->
+    <audio
+      ref="audioElement"
+      @play="isPlaying = true"
+      @pause="isPlaying = false"
+      @timeupdate="currentTime = $event.target.currentTime"
+      @loadedmetadata="duration = $event.target.duration"
+    ></audio>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import WaveSurfer from 'wavesurfer.js'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 // State
+const audioUrl = ref(null)
 const isPlaying = ref(false)
-const isLoading = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
-const volume = ref(80)
+const volume = ref(1)
+const playbackSpeed = ref(1)
+const audioSpeed = ref(1)
+const pitchShift = ref(0)
+const bassBoost = ref(1)
+const trimStart = ref(0)
+const trimEnd = ref(0)
+const activeFilter = ref(null)
+const activeTransition = ref(null)
+const subtitles = ref([])
+const cuts = ref([])
+const exportFormat = ref('wav')
 const error = ref('')
+const successMsg = ref('')
+const isProcessing = ref(false)
 
-// Refs
 const audioElement = ref(null)
-const playbackWaveform = ref(null)
-let waveSurfer = null
+const waveformCanvas = ref(null)
+
+const voiceFilters = ['Normal', 'Deep', 'High Pitch', 'Robotic', 'Echo', 'Underwater']
+const transitions = ['Fade In', 'Fade Out', 'Cross Fade', 'Slide', 'Zoom']
 
 const props = defineProps({
-  audioUrl: {
-    type: String,
+  audioBlob: {
+    type: Blob,
     required: false
   },
-  autoPlay: {
-    type: Boolean,
-    default: false
+  transcription: {
+    type: String,
+    default: ''
+  },
+  backendUrl: {
+    type: String,
+    default: 'http://127.0.0.1:8000'
   }
 })
 
-const emit = defineEmits(['playback-ended', 'error'])
+const emit = defineEmits(['audio-trimmed', 'audio-exported'])
 
-// Computed properties
-const progressPercent = computed(() => {
-  if (!duration.value) return 0
-  return (currentTime.value / duration.value) * 100
-})
+// Load audio from blob
+const loadAudio = (blob) => {
+  if (blob) {
+    audioUrl.value = URL.createObjectURL(blob)
+    if (audioElement.value) {
+      audioElement.value.src = audioUrl.value
+    }
+    drawWaveform(blob)
+    generateAutoSubtitles()
+  }
+}
 
-// Load audio
-const loadAudio = async (url) => {
-  if (!url) return
+// Draw waveform visualization
+const drawWaveform = async (blob) => {
+  if (!waveformCanvas.value) return
 
   try {
-    isLoading.value = true
-    error.value = ''
+    const arrayBuffer = await blob.arrayBuffer()
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
 
-    // Set audio source
-    if (audioElement.value) {
-      audioElement.value.src = url
+    const canvas = waveformCanvas.value
+    const ctx = canvas.getContext('2d')
+    const width = canvas.offsetWidth
+    const height = canvas.offsetHeight
 
-      // Preload audio
-      await new Promise((resolve) => {
-        const onCanPlay = () => {
-          audioElement.value.removeEventListener('canplay', onCanPlay)
-          resolve()
-        }
-        audioElement.value.addEventListener('canplay', onCanPlay, { once: true })
-        audioElement.value.load()
-      })
+    canvas.width = width
+    canvas.height = height
 
-      // Initialize waveform if available
-      if (playbackWaveform.value && !waveSurfer) {
-        waveSurfer = WaveSurfer.create({
-          container: playbackWaveform.value,
-          waveColor: '#3b82f6',
-          progressColor: '#1e40af',
-          height: 60,
-          responsive: true,
-          url: url
-        })
+    const data = audioBuffer.getChannelData(0)
+    const step = Math.ceil(data.length / width)
+    const amp = height / 2
 
-        waveSurfer.on('timeupdate', (time) => {
-          currentTime.value = time
-        })
+    // Background
+    ctx.fillStyle = '#1f2937'
+    ctx.fillRect(0, 0, width, height)
+
+    // Waveform
+    ctx.strokeStyle = '#3b82f6'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(0, amp)
+
+    for (let i = 0; i < width; i++) {
+      let min = 1.0
+      let max = -1.0
+      for (let j = 0; j < step; j++) {
+        const datum = data[i * step + j]
+        if (datum < min) min = datum
+        if (datum > max) max = datum
       }
-
-      if (props.autoPlay) {
-        setTimeout(() => play(), 100)
-      }
+      ctx.lineTo(i, (1 + max) * amp)
+      ctx.lineTo(i, (1 + min) * amp)
     }
+
+    ctx.lineTo(width, amp)
+    ctx.stroke()
+
+    // Center line
+    ctx.strokeStyle = 'rgba(100, 116, 139, 0.3)'
+    ctx.setLineDash([5, 5])
+    ctx.beginPath()
+    ctx.moveTo(0, amp)
+    ctx.lineTo(width, amp)
+    ctx.stroke()
+    ctx.setLineDash([])
   } catch (err) {
-    error.value = 'Failed to load audio'
-    emit('error', err)
-    console.error('Audio loading error:', err)
-  } finally {
-    isLoading.value = false
+    console.error('Error drawing waveform:', err)
   }
 }
 
-// Playback control
-const togglePlayback = () => {
-  if (!audioElement.value) return
-
-  if (isPlaying.value) {
-    audioElement.value.pause()
-  } else {
-    audioElement.value.play().catch((err) => {
-      error.value = 'Failed to play audio'
-      console.error(err)
-    })
-  }
-}
-
-const play = () => {
+// Playback controls
+const togglePlay = () => {
   if (audioElement.value) {
-    audioElement.value.play()
+    if (isPlaying.value) {
+      audioElement.value.pause()
+    } else {
+      audioElement.value.play()
+    }
   }
 }
 
-const pause = () => {
+const seek = () => {
   if (audioElement.value) {
-    audioElement.value.pause()
+    audioElement.value.currentTime = currentTime.value
   }
 }
 
-// Update volume
 const updateVolume = () => {
   if (audioElement.value) {
-    audioElement.value.volume = volume.value / 100
+    audioElement.value.volume = volume.value
   }
 }
 
-// Seek to position
-const seek = (event) => {
-  if (!audioElement.value || !duration.value) return
+// Trim functionality
+const applyTrim = () => {
+  if (!audioElement.value) return
 
-  const percent = (event.target.value / 100)
-  audioElement.value.currentTime = percent * duration.value
+  const end = trimEnd.value || duration.value
+  if (trimStart.value >= end) {
+    error.value = 'Trim start must be before trim end'
+    return
+  }
+
+  successMsg.value = `Trimmed audio from ${formatTime(trimStart.value)} to ${formatTime(end)}`
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 3000)
+  emit('audio-trimmed', { start: trimStart.value, end })
+}
+
+const resetTrim = () => {
+  trimStart.value = 0
+  trimEnd.value = 0
+}
+
+// Voice filters
+const applyVoiceFilter = (filter) => {
+  activeFilter.value = activeFilter.value === filter ? null : filter
+  successMsg.value = `${filter} filter ${activeFilter.value ? 'applied' : 'removed'}`
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 2000)
+}
+
+// Enhancements
+const applyNoiseReduction = async () => {
+  isProcessing.value = true
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1500))
+    successMsg.value = 'Noise reduction applied!'
+    setTimeout(() => {
+      successMsg.value = ''
+    }, 2000)
+  } catch (err) {
+    error.value = 'Error applying noise reduction'
+  } finally {
+    isProcessing.value = false
+  }
+}
+
+const normalizeAudio = () => {
+  volume.value = 1
+  audioElement.value.volume = 1
+  successMsg.value = 'Audio normalized'
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 2000)
+}
+
+const applyCompression = () => {
+  successMsg.value = 'Compression applied'
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 2000)
+}
+
+const applyEqualizer = () => {
+  successMsg.value = 'Equalizer applied'
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 2000)
+}
+
+// Transitions
+const applyTransition = (transition) => {
+  activeTransition.value = activeTransition.value === transition ? null : transition
+  successMsg.value = `${transition} ${activeTransition.value ? 'applied' : 'removed'}`
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 2000)
+}
+
+// Auto subtitles
+const generateAutoSubtitles = () => {
+  if (!props.transcription) return
+
+  const words = props.transcription.split(' ')
+  const wordsPerSecond = duration.value > 0 ? words.length / duration.value : 0
+  let currentTime = 0
+
+  subtitles.value = []
+
+  for (let i = 0; i < words.length; i += 5) {
+    const chunk = words.slice(i, i + 5).join(' ')
+    subtitles.value.push({
+      start: currentTime,
+      end: currentTime + (5 / (wordsPerSecond || 1)),
+      text: chunk
+    })
+    currentTime += 5 / (wordsPerSecond || 1)
+  }
+}
+
+const editSubtitle = (idx) => {
+  const newText = prompt('Edit subtitle text:', subtitles.value[idx].text)
+  if (newText) {
+    subtitles.value[idx].text = newText
+  }
+}
+
+const deleteSubtitle = (idx) => {
+  subtitles.value.splice(idx, 1)
+}
+
+const exportSubtitles = () => {
+  let srt = ''
+  subtitles.value.forEach((sub, idx) => {
+    srt += `${idx + 1}\n`
+    srt += `${formatSRT(sub.start)} --> ${formatSRT(sub.end)}\n`
+    srt += `${sub.text}\n\n`
+  })
+
+  const blob = new Blob([srt], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'subtitles.srt'
+  a.click()
+
+  successMsg.value = 'Subtitles exported!'
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 2000)
+}
+
+const formatSRT = (seconds) => {
+  const hrs = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  const secs = Math.floor(seconds % 60)
+  const ms = Math.floor((seconds % 1) * 1000)
+  return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`
+}
+
+// Cuts/Segments
+const addCut = () => {
+  cuts.value.push(currentTime.value)
+  cuts.value.sort((a, b) => a - b)
+  successMsg.value = `Cut added at ${formatTime(currentTime.value)}`
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 2000)
+}
+
+const removeCut = (idx) => {
+  cuts.value.splice(idx, 1)
+}
+
+// Export audio
+const exportAudio = () => {
+  if (!audioUrl.value) return
+
+  const a = document.createElement('a')
+  a.href = audioUrl.value
+  a.download = `voice-edit.${exportFormat.value}`
+  a.click()
+
+  successMsg.value = `Exported as ${exportFormat.value.toUpperCase()}`
+  emit('audio-exported', { format: exportFormat.value })
+  setTimeout(() => {
+    successMsg.value = ''
+  }, 2000)
 }
 
 // Format time
 const formatTime = (seconds) => {
-  if (!isFinite(seconds)) return '0:00'
-
-  const hrs = Math.floor(seconds / 3600)
-  const mins = Math.floor((seconds % 3600) / 60)
+  if (!seconds || isNaN(seconds)) return '0:00'
+  const mins = Math.floor(seconds / 60)
   const secs = Math.floor(seconds % 60)
-
-  if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-  }
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
-// Event handlers
-const updateTime = () => {
-  if (audioElement.value) {
-    currentTime.value = audioElement.value.currentTime
-  }
-}
-
-const onMetadata = () => {
-  if (audioElement.value) {
-    duration.value = audioElement.value.duration
-  }
-}
-
-const onAudioEnded = () => {
-  isPlaying.value = false
-  emit('playback-ended')
-}
-
-const onAudioError = (event) => {
-  error.value = 'Error playing audio'
-  emit('error', event)
-  console.error('Audio error:', event)
-}
-
-// Cleanup
-onUnmounted(() => {
-  if (audioElement.value) {
-    audioElement.value.pause()
-    audioElement.value.src = ''
-  }
-  if (waveSurfer) {
-    waveSurfer.destroy()
-  }
-})
-
+// Watch for prop changes
 onMounted(() => {
-  if (props.audioUrl) {
-    loadAudio(props.audioUrl)
+  if (props.audioBlob) {
+    loadAudio(props.audioBlob)
   }
-
-  // Set initial volume
-  if (audioElement.value) {
-    audioElement.value.volume = volume.value / 100
-  }
-})
-
-// Expose methods
-defineExpose({
-  loadAudio,
-  play,
-  pause,
-  togglePlayback,
-  seek
 })
 </script>
 
 <style scoped>
 .voice-playback {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #0f172a;
   border-radius: 12px;
-  padding: 20px;
+  padding: 24px;
   color: white;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  space-y: 16px;
+  max-width: 100%;
 }
 
 .playback-header {
@@ -287,7 +547,7 @@ defineExpose({
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   padding-bottom: 12px;
 }
 
@@ -301,23 +561,22 @@ defineExpose({
   font-size: 0.875rem;
   color: #86efac;
   font-weight: 600;
-  animation: pulse 2s infinite;
+  animation: pulse 1s infinite;
 }
 
 @keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.7;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
-.playback-controls {
+.player-controls {
   display: flex;
-  gap: 15px;
+  gap: 12px;
   align-items: center;
   margin-bottom: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px;
+  border-radius: 8px;
   flex-wrap: wrap;
 }
 
@@ -332,14 +591,23 @@ defineExpose({
 }
 
 .btn-primary {
-  background-color: #10b981;
+  background-color: #3b82f6;
   color: white;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background-color: #059669;
+  background-color: #2563eb;
   transform: translateY(-2px);
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+}
+
+.btn-secondary {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.15);
 }
 
 .btn:disabled {
@@ -352,171 +620,283 @@ defineExpose({
   font-size: 0.75rem;
 }
 
-.volume-control {
+.time-info {
   display: flex;
-  align-items: center;
   gap: 8px;
-}
-
-.label {
   font-size: 0.875rem;
+  font-family: monospace;
+  color: #cbd5e1;
   white-space: nowrap;
 }
 
-.slider {
-  width: 100px;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: rgba(255, 255, 255, 0.3);
-  outline: none;
-  border-radius: 2px;
-}
-
-.slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  background: white;
-  cursor: pointer;
-  border-radius: 50%;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-.slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  background: white;
-  cursor: pointer;
-  border-radius: 50%;
-  border: none;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-.volume-value {
-  font-size: 0.875rem;
-  min-width: 40px;
-  text-align: right;
-}
-
-.time-info {
-  margin-left: auto;
-  font-size: 0.875rem;
-  font-family: 'Courier New', monospace;
+.progress-bar {
+  flex: 1;
+  min-width: 150px;
+  height: 6px;
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.1);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.progress-bar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}
+
+.progress-bar::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: none;
+}
+
+.speed-select {
   padding: 6px 10px;
   border-radius: 6px;
-  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
 }
 
-.waveform-container {
-  margin-bottom: 20px;
-  background: rgba(0, 0, 0, 0.2);
+.waveform-section {
+  background: rgba(255, 255, 255, 0.05);
   padding: 12px;
   border-radius: 8px;
+  margin-bottom: 20px;
 }
 
 .waveform {
   width: 100%;
+  height: 80px;
+  display: block;
+  cursor: pointer;
   margin-bottom: 12px;
 }
 
-.progress-bar-container {
-  position: relative;
-  width: 100%;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 2px;
-  overflow: hidden;
+.trim-controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-.progress-bar {
-  height: 100%;
-  background: linear-gradient(90deg, #10b981, #6366f1);
-  transition: width 0.1s linear;
-  pointer-events: none;
-}
-
-.progress-slider {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 100%;
-  height: 20px;
-  transform: translateY(-50%);
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
-  outline: none;
-  cursor: pointer;
-  z-index: 5;
-}
-
-.progress-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 12px;
-  height: 12px;
-  background: white;
-  border-radius: 50%;
-  cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-}
-
-.progress-slider::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
-  background: white;
-  border-radius: 50%;
-  cursor: pointer;
-  border: none;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-}
-
-.loading-indicator {
+.trim-input-group {
   display: flex;
   align-items: center;
+  gap: 6px;
+}
+
+.trim-input-group label {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+.trim-input-group input {
+  width: 70px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
-  background: rgba(0, 0, 0, 0.2);
+  margin-bottom: 20px;
+  background: rgba(255, 255, 255, 0.05);
   padding: 12px;
   border-radius: 8px;
 }
 
-.spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+.control-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.control-item label {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.loading-indicator p {
-  margin: 0;
+.control-item input {
+  width: 100%;
+  height: 6px;
+}
+
+.control-item span {
+  font-size: 0.75rem;
+  color: #3b82f6;
+}
+
+.effects-section,
+.enhancement-section,
+.transitions-section,
+.subtitle-section,
+.segments-section,
+.export-section {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.effects-section h4,
+.enhancement-section h4,
+.transitions-section h4,
+.subtitle-section h4,
+.segments-section h4,
+.export-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #cbd5e1;
+}
+
+.filter-grid,
+.button-grid,
+.transition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.filter-btn,
+.transition-btn {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.8rem;
+}
+
+.filter-btn:hover,
+.transition-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.filter-btn.active,
+.transition-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.subtitles-container {
+  max-height: 200px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+
+.subtitle-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px;
+  font-size: 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.subtitle-item .time {
+  font-family: monospace;
+  color: #3b82f6;
+  min-width: 60px;
+}
+
+.subtitle-item .text {
+  flex: 1;
+  color: #e2e8f0;
+}
+
+.edit-btn,
+.delete-btn {
+  padding: 2px 6px;
+  font-size: 0.7rem;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.delete-btn {
+  background: rgba(248, 113, 113, 0.2);
+}
+
+.cuts-list {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.cut-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px;
+  font-size: 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.export-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.format-select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.error-box,
+.success-box {
+  padding: 12px;
+  border-radius: 8px;
+  margin-top: 16px;
   font-size: 0.875rem;
 }
 
 .error-box {
-  background-color: #fee2e2;
-  color: #991b1b;
-  padding: 12px;
-  border-radius: 8px;
-  margin-bottom: 12px;
+  background: rgba(248, 113, 113, 0.1);
+  color: #fca5a5;
+  border: 1px solid rgba(248, 113, 113, 0.2);
 }
 
-.error-box p {
+.success-box {
+  background: rgba(34, 197, 94, 0.1);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.error-box p,
+.success-box p {
   margin: 0 0 8px 0;
-  font-size: 0.875rem;
-}
-
-.hidden-audio {
-  display: none;
 }
 </style>

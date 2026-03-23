@@ -1,7 +1,7 @@
 <template>
   <div class="audio-recorder">
     <div class="recorder-header">
-      <h3>Audio Recorder</h3>
+      <h3>🎤 Audio Recorder</h3>
       <span class="recording-status" :class="{ recording: isRecording }">
         {{ isRecording ? '● Recording...' : 'Ready' }}
       </span>
@@ -13,16 +13,16 @@
         class="btn btn-primary"
         :disabled="isProcessing"
       >
-        <span v-if="!isRecording">🎤 Start Recording</span>
-        <span v-else>⏹️ Stop Recording</span>
+        <span v-if="!isRecording">Start Recording</span>
+        <span v-else>Stop Recording</span>
       </button>
 
       <button
         @click="clearRecording"
         class="btn btn-secondary"
-        :disabled="!recordedChunks.length || isRecording || isProcessing"
+        :disabled="!audioBlob || isRecording || isProcessing"
       >
-        🗑️ Clear
+        Clear
       </button>
 
       <div class="time-display">
@@ -31,8 +31,8 @@
     </div>
 
     <!-- Waveform Visualization -->
-    <div v-if="recordedChunks.length > 0" class="waveform-container">
-      <div ref="waveformDiv" class="waveform"></div>
+    <div v-if="audioBlob" class="waveform-container">
+      <canvas ref="waveformCanvas" class="waveform"></canvas>
     </div>
 
     <!-- Transcription Display -->
@@ -56,26 +56,22 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
-import WaveSurfer from 'wavesurfer.js'
-import RecordRTC from 'recordrtc'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 // State
 const isRecording = ref(false)
 const isProcessing = ref(false)
-const recordedChunks = ref([])
 const recordingTime = ref(0)
 const transcription = ref('')
 const error = ref('')
-const waveformDiv = ref(null)
+const waveformCanvas = ref(null)
+const audioBlob = ref(null)
 
 // Audio and recording
 let mediaRecorder = null
-let waveSurfer = null
 let recordingInterval = null
-let audioContext = null
-let analyser = null
 let mediaStream = null
+let audioContext = null
 
 const props = defineProps({
   backendUrl: {
@@ -90,17 +86,20 @@ const emit = defineEmits(['recording-complete', 'transcription-complete'])
 const initializeRecording = async () => {
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    mediaRecorder = new RecordRTC(mediaStream, {
-      type: 'audio',
-      mimeType: 'audio/wav',
-      sampleRate: 44100,
-      numberOfAudioChannels: 1,
-      recorderType: RecordRTC.StereoAudioRecorder,
-      timeSlice: 100,
-      ondataavailable: (blob) => {
-        recordedChunks.value.push(blob)
+    audioContext = new (window.AudioContext || window.webkitAudioContext)()
+    mediaRecorder = new MediaRecorder(mediaStream)
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        audioBlob.value = new Blob([e.data], { type: 'audio/wav' })
       }
-    })
+    }
+
+    mediaRecorder.onstop = async () => {
+      if (audioBlob.value) {
+        await processRecording(audioBlob.value)
+      }
+    }
   } catch (err) {
     error.value = 'Microphone access denied. Please allow microphone access.'
     console.error('Error accessing microphone:', err)
@@ -115,12 +114,12 @@ const toggleRecording = async () => {
 
   if (!isRecording.value) {
     // Start recording
-    recordedChunks.value = []
+    audioBlob.value = null
     recordingTime.value = 0
     transcription.value = ''
     error.value = ''
 
-    mediaRecorder.startRecording()
+    mediaRecorder.start()
     isRecording.value = true
 
     recordingInterval = setInterval(() => {
@@ -130,18 +129,15 @@ const toggleRecording = async () => {
     // Stop recording
     isRecording.value = false
     clearInterval(recordingInterval)
-
-    mediaRecorder.stopRecording(async (blob) => {
-      await processRecording(blob)
-    })
+    mediaRecorder.stop()
   }
 }
 
 // Process recorded audio
 const processRecording = async (blob) => {
   try {
-    // Update waveform
-    updateWaveform(blob)
+    // Draw waveform
+    await drawWaveform(blob)
 
     // Emit the recorded audio
     emit('recording-complete', blob)
@@ -154,22 +150,56 @@ const processRecording = async (blob) => {
   }
 }
 
-// Update waveform visualization
-const updateWaveform = (blob) => {
-  if (!waveformDiv.value) return
+// Draw waveform using Web Audio API
+const drawWaveform = async (blob) => {
+  if (!waveformCanvas.value) return
 
-  if (!waveSurfer) {
-    waveSurfer = WaveSurfer.create({
-      container: waveformDiv.value,
-      waveColor: '#3b82f6',
-      progressColor: '#1e40af',
-      height: 60,
-      responsive: true
-    })
+  try {
+    const arrayBuffer = await blob.arrayBuffer()
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
+
+    const canvas = waveformCanvas.value
+    const ctx = canvas.getContext('2d')
+    const width = canvas.width
+    const height = canvas.height
+
+    // Set canvas size
+    canvas.width = canvas.offsetWidth
+    canvas.height = canvas.offsetHeight
+
+    // Get audio data
+    const data = audioBuffer.getChannelData(0)
+    const step = Math.ceil(data.length / width)
+    const amp = height / 2
+
+    // Draw background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)'
+    ctx.fillRect(0, 0, width, height)
+
+    // Draw waveform
+    ctx.strokeStyle = '#3b82f6'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(0, amp)
+
+    for (let i = 0; i < width; i++) {
+      let min = 1.0
+      let max = -1.0
+      for (let j = 0; j < step; j++) {
+        const datum = data[i * step + j]
+        if (datum < min) min = datum
+        if (datum > max) max = datum
+      }
+      ctx.lineTo(i, (1 + max) * amp)
+      ctx.lineTo(i, (1 + min) * amp)
+    }
+
+    ctx.lineTo(width, amp)
+    ctx.stroke()
+  } catch (err) {
+    console.error('Error drawing waveform:', err)
   }
-
-  const url = URL.createObjectURL(blob)
-  waveSurfer.load(url)
 }
 
 // Transcribe audio
@@ -204,14 +234,14 @@ const transcribeAudio = async (blob) => {
 
 // Clear recording
 const clearRecording = () => {
-  recordedChunks.value = []
+  audioBlob.value = null
   recordingTime.value = 0
   transcription.value = ''
   error.value = ''
 
-  if (waveSurfer) {
-    waveSurfer.destroy()
-    waveSurfer = null
+  if (waveformCanvas.value) {
+    const ctx = waveformCanvas.value.getContext('2d')
+    ctx.clearRect(0, 0, waveformCanvas.value.width, waveformCanvas.value.height)
   }
 }
 
@@ -233,12 +263,9 @@ onUnmounted(() => {
   if (mediaStream) {
     mediaStream.getTracks().forEach(track => track.stop())
   }
-  if (waveSurfer) {
-    waveSurfer.destroy()
-  }
   if (mediaRecorder) {
     try {
-      mediaRecorder.stopRecording()
+      mediaRecorder.stop()
     } catch (e) {
       // Already stopped
     }
@@ -248,6 +275,190 @@ onUnmounted(() => {
 onMounted(async () => {
   await initializeRecording()
 })
+</script>
+
+<style scoped>
+.audio-recorder {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  padding: 20px;
+  color: white;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.recorder-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+  padding-bottom: 12px;
+}
+
+.recorder-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.recording-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.875rem;
+  color: #e0e7ff;
+}
+
+.recording-status.recording {
+  color: #fecaca;
+  font-weight: 600;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0.5;
+  }
+}
+
+.recorder-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-primary {
+  background-color: #10b981;
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #059669;
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+}
+
+.btn-secondary {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-small {
+  padding: 4px 12px;
+  font-size: 0.75rem;
+}
+
+.time-display {
+  margin-left: auto;
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 8px 12px;
+  border-radius: 6px;
+  min-width: 80px;
+  text-align: right;
+}
+
+.waveform-container {
+  margin-bottom: 20px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.waveform {
+  width: 100%;
+  height: 80px;
+  display: block;
+}
+
+.transcription-box {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.transcription-box h4 {
+  margin: 0 0 8px 0;
+  font-size: 0.875rem;
+  color: #e0e7ff;
+}
+
+.transcription-text {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: #ffffff;
+}
+
+.error-box {
+  background-color: #fee2e2;
+  color: #991b1b;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.error-box p {
+  margin: 0 0 8px 0;
+  font-size: 0.875rem;
+}
+
+.processing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.processing-indicator p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+</style>
 </script>
 
 <style scoped>
