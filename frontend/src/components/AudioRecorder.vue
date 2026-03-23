@@ -1,9 +1,9 @@
 <template>
   <div class="audio-recorder">
     <div class="recorder-header">
-      <h3>🎤 Audio Recorder</h3>
+      <h3>Record Audio</h3>
       <span class="recording-status" :class="{ recording: isRecording }">
-        {{ isRecording ? '● Recording...' : 'Ready' }}
+        {{ isRecording ? 'Recording...' : 'Ready' }}
       </span>
     </div>
 
@@ -13,8 +13,7 @@
         class="btn btn-primary"
         :disabled="isProcessing"
       >
-        <span v-if="!isRecording">Start Recording</span>
-        <span v-else>Stop Recording</span>
+        {{ !isRecording ? 'Start Recording' : 'Stop Recording' }}
       </button>
 
       <button
@@ -161,8 +160,8 @@ const drawWaveform = async (blob) => {
 
     const canvas = waveformCanvas.value
     const ctx = canvas.getContext('2d')
-    const width = canvas.width
-    const height = canvas.height
+    const width = canvas.offsetWidth
+    const height = canvas.offsetHeight
 
     // Set canvas size
     canvas.width = canvas.offsetWidth
@@ -459,4 +458,3 @@ onMounted(async () => {
   font-size: 0.875rem;
 }
 </style>
-</script>
