@@ -101,9 +101,10 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import AudioRecorder from './AudioRecorder.vue'
 import VoicePlayback from './VoicePlayback.vue'
+import { saveChat, getChat, getAllChats, deleteChat, uploadAudio } from '../services/firebaseService'
 
 // State
 const chatHistory = ref([])
@@ -117,6 +118,22 @@ const successMessage = ref('')
 const recorderKey = ref(0)
 const chatHistoryContainer = ref(null)
 const currentRecordingBlob = ref(null)
+const currentChatId = ref(null)
+
+// Initialize chat
+const initializeChat = async () => {
+  try {
+    const chatId = `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    currentChatId.value = chatId
+    successMessage.value = 'New chat created'
+    setTimeout(() => {
+      successMessage.value = ''
+    }, 2000)
+  } catch (err) {
+    error.value = 'Failed to initialize chat'
+    console.error(err)
+  }
+}
 
 // Send voice message to backend
 const sendVoiceMessage = async (audioBlob, userTranscription) => {
@@ -124,12 +141,23 @@ const sendVoiceMessage = async (audioBlob, userTranscription) => {
     isProcessing.value = true
     error.value = ''
 
+    // Upload audio to Firebase Storage
+    const audioPath = `chats/${currentChatId.value}/user_${Date.now()}.wav`
+    const uploadResult = await uploadAudio(audioBlob, audioPath)
+
+    if (!uploadResult.success) {
+      error.value = 'Failed to upload audio'
+      return
+    }
+
     // Add user message to chat
-    chatHistory.value.push({
+    const userMessage = {
       role: 'user',
       text: userTranscription,
-      audioUrl: URL.createObjectURL(audioBlob)
-    })
+      audioUrl: uploadResult.url,
+      timestamp: new Date().toISOString()
+    }
+    chatHistory.value.push(userMessage)
 
     // Scroll to bottom
     scrollToBottom()
@@ -152,10 +180,19 @@ const sendVoiceMessage = async (audioBlob, userTranscription) => {
       const responseData = data.data
 
       // Add AI response to chat
-      chatHistory.value.push({
+      const aiMessage = {
         role: 'assistant',
         text: responseData.transcription || 'Response processed',
-        audioUrl: responseData.audio_response_url ? `${backendUrl.value}/${responseData.audio_response_url}` : null
+        audioUrl: responseData.audio_response_url ? `${backendUrl.value}/${responseData.audio_response_url}` : null,
+        timestamp: new Date().toISOString()
+      }
+      chatHistory.value.push(aiMessage)
+
+      // Save chat to Firebase
+      await saveChat(currentChatId.value, {
+        messages: chatHistory.value,
+        selectedVoice: selectedVoice.value,
+        updatedAt: new Date().toISOString()
       })
 
       // Auto-play response if enabled
@@ -214,6 +251,11 @@ const scrollToBottom = () => {
     }
   })
 }
+
+// Initialize on mount
+onMounted(() => {
+  initializeChat()
+})
 </script>
 
 <style scoped>
