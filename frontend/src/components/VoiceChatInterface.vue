@@ -104,7 +104,6 @@
 import { ref, computed, nextTick, onMounted } from 'vue'
 import AudioRecorder from './AudioRecorder.vue'
 import VoicePlayback from './VoicePlayback.vue'
-import { saveChat, getChat, getAllChats, deleteChat, uploadAudio } from '../services/firebaseService'
 
 // State
 const chatHistory = ref([])
@@ -141,20 +140,14 @@ const sendVoiceMessage = async (audioBlob, userTranscription) => {
     isProcessing.value = true
     error.value = ''
 
-    // Upload audio to Firebase Storage
-    const audioPath = `chats/${currentChatId.value}/user_${Date.now()}.wav`
-    const uploadResult = await uploadAudio(audioBlob, audioPath)
-
-    if (!uploadResult.success) {
-      error.value = 'Failed to upload audio'
-      return
-    }
+    // Use local blob URL
+    const audioUrl = URL.createObjectURL(audioBlob)
 
     // Add user message to chat
     const userMessage = {
       role: 'user',
       text: userTranscription,
-      audioUrl: uploadResult.url,
+      audioUrl: audioUrl,
       timestamp: new Date().toISOString()
     }
     chatHistory.value.push(userMessage)
@@ -187,13 +180,6 @@ const sendVoiceMessage = async (audioBlob, userTranscription) => {
         timestamp: new Date().toISOString()
       }
       chatHistory.value.push(aiMessage)
-
-      // Save chat to Firebase
-      await saveChat(currentChatId.value, {
-        messages: chatHistory.value,
-        selectedVoice: selectedVoice.value,
-        updatedAt: new Date().toISOString()
-      })
 
       // Auto-play response if enabled
       if (autoPlayResponse.value && responseData.audio_response_url) {
