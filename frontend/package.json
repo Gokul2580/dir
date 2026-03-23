@@ -19,7 +19,9 @@
     "uuid": "^10.0.0",
     "vue": "^3.4.37",
     "vue-router": "^4.4.3",
-    "vue3-popper": "^1.5.0"
+    "vue3-popper": "^1.5.0",
+    "wavesurfer.js": "^7.11.0",
+    "recordrtc": "^5.4.15"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.1.2",

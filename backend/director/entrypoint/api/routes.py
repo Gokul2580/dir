@@ -11,6 +11,7 @@ agent_bp = Blueprint("agent", __name__, url_prefix="/agent")
 session_bp = Blueprint("session", __name__, url_prefix="/session")
 videodb_bp = Blueprint("videodb", __name__, url_prefix="/videodb")
 config_bp = Blueprint("config", __name__, url_prefix="/config")
+voice_bp = Blueprint("voice", __name__, url_prefix="/voice")
 
 
 @agent_bp.route("/", methods=["GET"], strict_slashes=False)
@@ -260,3 +261,114 @@ def upload_video(collection_id):
 def config_check():
     config_handler = ConfigHandler()
     return config_handler.check()
+
+
+# Voice Chat API Endpoints
+
+@voice_bp.route("/transcribe", methods=["POST"])
+def transcribe_audio():
+    """Transcribe audio file to text using Whisper API."""
+    try:
+        from director.agents.voice_chat import VoiceChatAgent
+        from director.core.session import Session
+        
+        if "file" not in request.files:
+            return {"message": "Audio file is required", "error": "no_file"}, 400
+        
+        audio_file = request.files["file"]
+        if audio_file.filename == "":
+            return {"message": "No audio file selected", "error": "empty_file"}, 400
+        
+        # Read audio bytes
+        audio_bytes = audio_file.read()
+        
+        # Create a temporary session for voice processing
+        session = Session()
+        voice_agent = VoiceChatAgent(session=session)
+        
+        # Transcribe using agent
+        response = voice_agent._transcribe_audio(audio_input=audio_bytes)
+        
+        if response:
+            return {"success": True, "transcription": response}, 200
+        else:
+            return {"success": False, "message": "Failed to transcribe audio"}, 400
+            
+    except Exception as e:
+        return {"success": False, "message": str(e), "error": "transcription_failed"}, 500
+
+
+@voice_bp.route("/speech", methods=["POST"])
+def generate_speech():
+    """Generate speech from text using TTS API."""
+    try:
+        from director.agents.voice_chat import VoiceChatAgent
+        from director.core.session import Session
+        
+        data = request.get_json()
+        if not data or not data.get("text"):
+            return {"message": "Text is required", "error": "no_text"}, 400
+        
+        text = data.get("text")
+        voice_id = data.get("voice_id", "default")
+        
+        if len(text) > 5000:
+            return {"message": "Text exceeds maximum length (5000 characters)"}, 400
+        
+        # Create a temporary session for voice processing
+        session = Session()
+        voice_agent = VoiceChatAgent(session=session)
+        
+        # Generate speech
+        audio_path = voice_agent._generate_speech(text, voice_id)
+        
+        if audio_path:
+            return {"success": True, "audio_url": audio_path}, 200
+        else:
+            return {"success": False, "message": "Failed to generate speech"}, 400
+            
+    except Exception as e:
+        return {"success": False, "message": str(e), "error": "speech_generation_failed"}, 500
+
+
+@voice_bp.route("/chat", methods=["POST"])
+def voice_chat():
+    """Full voice chat handler - transcribe, process, and generate response."""
+    try:
+        from director.agents.voice_chat import VoiceChatAgent
+        from director.core.session import Session
+        
+        if "audio" not in request.files:
+            return {"message": "Audio file is required", "error": "no_file"}, 400
+        
+        audio_file = request.files["audio"]
+        if audio_file.filename == "":
+            return {"message": "No audio file selected", "error": "empty_file"}, 400
+        
+        # Optional response text for TTS
+        response_text = request.form.get("response_text")
+        voice_id = request.form.get("voice_id", "default")
+        generate_speech = request.form.get("generate_speech", "true").lower() == "true"
+        
+        # Read audio bytes
+        audio_bytes = audio_file.read()
+        
+        # Create a temporary session for voice processing
+        session = Session()
+        voice_agent = VoiceChatAgent(session=session)
+        
+        # Process voice chat
+        result = voice_agent.run(
+            audio_input=audio_bytes,
+            generate_speech_response=generate_speech,
+            response_text=response_text,
+            voice_id=voice_id
+        )
+        
+        if result.status == "success":
+            return {"success": True, "data": result.data}, 200
+        else:
+            return {"success": False, "message": result.message}, 400
+            
+    except Exception as e:
+        return {"success": False, "message": str(e), "error": "voice_chat_failed"}, 500
